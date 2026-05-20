@@ -1,0 +1,8 @@
+.venv/
+.pytest_cache/
+.coverage
+dist/
+__pycache__/
+*.py[cod]
+
+/agent.md
