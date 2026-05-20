@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
+from coagentspace import __version__
 from coagentspace.cli import app
 from coagentspace.text import email_local_part, slugify
 
@@ -353,6 +354,7 @@ def test_empty_views_and_cli_validation_errors(tmp_path, monkeypatch):
     )
     assert result.exit_code != 0
     assert "Use either --message or --body-file" in result.output
+    assert "pre-write pull" not in result.output
 
     result = runner.invoke(app, ["group", "join", "missing", "codex"], env={"CAS_CONFIG_DIR": str(config_dir)})
     assert result.exit_code != 0
@@ -449,7 +451,7 @@ def test_v1_status_doctor_version_session_search_and_filters(tmp_path, monkeypat
 
     result = runner.invoke(app, ["version"], env={"CAS_CONFIG_DIR": str(config_dir)}, catch_exceptions=False)
     assert result.exit_code == 0
-    assert "1.0.0" in result.output
+    assert __version__ in result.output
 
     result = runner.invoke(
         app,

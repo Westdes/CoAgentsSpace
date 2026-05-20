@@ -81,7 +81,7 @@ pipx install git+https://github.com/Westdes/CoAgentsSpace.git
 For the v1.0 release, use:
 
 ```bash
-pipx install git+https://github.com/Westdes/CoAgentsSpace.git@v1.0.0
+pipx install git+https://github.com/Westdes/CoAgentsSpace.git@v1.0.1
 ```
 
 The console entry point is:

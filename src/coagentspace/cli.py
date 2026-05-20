@@ -213,6 +213,7 @@ def send(
     """Create a new append-only thread."""
     if bool(to_agent) == bool(to_group):
         fail("Use exactly one of --to-agent or --to-group.")
+    body = read_body(message, body_file)
     space = resolve_space(Path.cwd(), space_option)
     prepare_write(space)
     sender = from_agent or default_agent(required=True)
@@ -222,7 +223,7 @@ def send(
         to_type="agent" if to_agent else "group",
         to=to_agent or to_group or "",
         title=title,
-        body=read_body(message, body_file),
+        body=body,
         session_id=session_id,
     )
     typer.echo(f"Created {thread_id} as {sender} session {resolved_session}")
@@ -276,6 +277,7 @@ def append(
     space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
 ) -> None:
     """Append a Markdown entry to a thread."""
+    body = read_body(message, body_file)
     space = resolve_space(Path.cwd(), space_option)
     prepare_write(space)
     resolved_agent = agent or default_agent(required=True)
@@ -284,7 +286,7 @@ def append(
         thread_id=thread_id,
         agent=resolved_agent,
         session_id=session_id,
-        message=read_body(message, body_file),
+        message=body,
     )
     typer.echo(f"Appended to {thread_id} as {resolved_agent} session {resolved_session}")
     echo_sync(space, f"cas append {thread_id}")
