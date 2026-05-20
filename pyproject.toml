@@ -1,6 +1,6 @@
 [project]
 name = "coagentspace"
-version = "0.1.0"
+version = "1.0.0"
 description = "Append-only Markdown threads for async agent collaboration."
 readme = "README.md"
 requires-python = ">=3.12"

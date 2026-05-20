@@ -14,6 +14,10 @@ def run_git(args: list[str], cwd: Path, check: bool = True) -> subprocess.Comple
     )
 
 
+def git_error(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or result.stdout or "git command failed").strip()
+
+
 def git_output(args: list[str], cwd: Path) -> str | None:
     result = run_git(args, cwd, check=False)
     if result.returncode != 0:
@@ -42,6 +46,17 @@ def is_worktree_clean(path: Path) -> bool:
     return result.returncode == 0 and not result.stdout.strip()
 
 
+def require_clean_worktree(path: Path) -> None:
+    result = run_git(["status", "--porcelain"], cwd=path, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(git_error(result))
+    if result.stdout.strip():
+        raise RuntimeError(
+            "CAS space has uncommitted changes. Run `cas sync`, inspect the CAS repo, "
+            "or resolve the dirty worktree before mutating it."
+        )
+
+
 def git_identity(cwd: Path) -> tuple[str | None, str | None]:
     name = git_output(["config", "user.name"], cwd) or git_output(["config", "--global", "user.name"], cwd)
     email = git_output(["config", "user.email"], cwd) or git_output(["config", "--global", "user.email"], cwd)
@@ -61,7 +76,7 @@ def has_remote(cwd: Path) -> bool:
 
 
 def current_branch(cwd: Path) -> str | None:
-    return git_output(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    return git_output(["branch", "--show-current"], cwd)
 
 
 def upstream_branch(cwd: Path) -> str | None:
@@ -71,6 +86,47 @@ def upstream_branch(cwd: Path) -> str | None:
 def remote_branch_exists(cwd: Path, remote: str, branch: str) -> bool:
     result = run_git(["ls-remote", "--exit-code", "--heads", remote, branch], cwd=cwd, check=False)
     return result.returncode == 0
+
+
+def remote_url(cwd: Path, remote: str = "origin") -> str | None:
+    return git_output(["remote", "get-url", remote], cwd)
+
+
+def latest_commit(cwd: Path) -> str | None:
+    return git_output(["rev-parse", "--short", "HEAD"], cwd)
+
+
+def pull_rebase_before_write(cwd: Path) -> list[str]:
+    """Ensure the CAS repo is clean and up to date before an append-only write."""
+    output: list[str] = []
+    require_clean_worktree(cwd)
+    if not has_remote(cwd):
+        output.append("No Git remote configured; skipped pre-write pull.")
+        return output
+
+    branch = current_branch(cwd)
+    if not branch:
+        output.append("No current branch yet; skipped pre-write pull.")
+        return output
+
+    upstream = upstream_branch(cwd)
+    remote_has_branch = remote_branch_exists(cwd, "origin", branch)
+    if upstream:
+        result = run_git(["pull", "--rebase"], cwd=cwd, check=False)
+    elif remote_has_branch:
+        result = run_git(["pull", "--rebase", "origin", branch], cwd=cwd, check=False)
+    else:
+        output.append("Remote branch not found yet; skipped pre-write pull.")
+        return output
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Could not pull/rebase the CAS space before writing. Resolve the Git issue, "
+            f"then retry. Details: {git_error(result)}"
+        )
+    output.append("Pulled latest CAS changes.")
+    require_clean_worktree(cwd)
+    return output
 
 
 def sync_space(cwd: Path, message: str) -> list[str]:
@@ -89,7 +145,7 @@ def sync_space(cwd: Path, message: str) -> list[str]:
         return output
 
     branch = current_branch(cwd)
-    if not branch or branch == "HEAD":
+    if not branch:
         raise RuntimeError("Cannot sync detached HEAD CAS space.")
 
     upstream = upstream_branch(cwd)

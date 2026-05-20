@@ -6,12 +6,34 @@ from typing import Annotated
 
 import typer
 
-from .git import git_identity, sync_space
+from . import __version__
+from .git import (
+    current_branch,
+    git_identity,
+    git_output,
+    has_remote,
+    is_worktree_clean,
+    latest_commit,
+    pull_rebase_before_write,
+    remote_url,
+    sync_space,
+    upstream_branch,
+)
 from .local import attach_space, load_profile, resolve_space, update_profile, validate_space
 from .registry import join_group, load_registry, register_agent, register_group, register_user
 from .space import initialize_space
 from .text import email_local_part, slugify
-from .threads import append_to_thread, create_thread, inbox_threads, iter_threads, thread_path
+from .threads import (
+    append_to_thread,
+    create_thread,
+    filter_threads,
+    inbox_threads,
+    invalid_thread_files,
+    iter_threads,
+    resolve_session_id,
+    search_threads,
+    thread_path,
+)
 
 
 app = typer.Typer(no_args_is_help=True, help="CoAgentSpace append-only thread CLI.")
@@ -56,6 +78,24 @@ def echo_sync(space: Path, message: str) -> None:
         typer.echo(line)
 
 
+def prepare_write(space: Path) -> None:
+    for line in pull_rebase_before_write(space):
+        typer.echo(line)
+
+
+def print_status(space: Path) -> None:
+    profile = load_profile()
+    typer.echo(f"project: {Path.cwd().resolve()}")
+    typer.echo(f"space: {space}")
+    typer.echo(f"default_user_id: {profile.default_user_id or ''}")
+    typer.echo(f"default_agent_id: {profile.default_agent_id or ''}")
+    typer.echo(f"branch: {current_branch(space) or ''}")
+    typer.echo(f"remote: {remote_url(space) or ''}")
+    typer.echo(f"upstream: {upstream_branch(space) or ''}")
+    typer.echo(f"dirty: {'no' if is_worktree_clean(space) else 'yes'}")
+    typer.echo(f"latest_commit: {latest_commit(space) or ''}")
+
+
 @app.command("init")
 def init_command(
     space_path: Annotated[Path, typer.Argument(help="Path to the independent CAS space repo.")],
@@ -66,6 +106,7 @@ def init_command(
 ) -> None:
     """Create an independent CoAgentSpace repo."""
     space = space_path.expanduser().resolve()
+    prepare_write(space)
     initialize_space(space)
 
     git_name, git_email = git_identity(space)
@@ -124,6 +165,7 @@ def agent_add(
 ) -> None:
     """Register an agent identity."""
     space = resolve_space(Path.cwd(), space_option)
+    prepare_write(space)
     owner = user or load_profile().default_user_id
     register_agent(space, agent_id, owner, label)
     typer.echo(f"Registered agent `{agent_id}` in {space}")
@@ -137,6 +179,7 @@ def group_add(
 ) -> None:
     """Register a group."""
     space = resolve_space(Path.cwd(), space_option)
+    prepare_write(space)
     register_group(space, group_id)
     typer.echo(f"Registered group `{group_id}` in {space}")
     echo_sync(space, f"cas group add {group_id}")
@@ -150,6 +193,7 @@ def group_join(
 ) -> None:
     """Add an agent to a group."""
     space = resolve_space(Path.cwd(), space_option)
+    prepare_write(space)
     join_group(space, group_id, agent_id)
     typer.echo(f"Added `{agent_id}` to group `{group_id}`")
     echo_sync(space, f"cas group join {group_id} {agent_id}")
@@ -163,33 +207,41 @@ def send(
     from_agent: Annotated[str | None, typer.Option("--from", help="Sender agent id.")] = None,
     message: Annotated[str | None, typer.Option("--message", help="Markdown message body.")] = None,
     body_file: Annotated[Path | None, typer.Option("--body-file", help="Read Markdown body from file.")] = None,
+    session_id: Annotated[str | None, typer.Option("--session-id", help="Audit session id for this send.")] = None,
     space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
 ) -> None:
     """Create a new append-only thread."""
     if bool(to_agent) == bool(to_group):
         fail("Use exactly one of --to-agent or --to-group.")
     space = resolve_space(Path.cwd(), space_option)
+    prepare_write(space)
     sender = from_agent or default_agent(required=True)
-    thread_id = create_thread(
+    thread_id, resolved_session = create_thread(
         space=space,
         from_agent=sender,
         to_type="agent" if to_agent else "group",
         to=to_agent or to_group or "",
         title=title,
         body=read_body(message, body_file),
+        session_id=session_id,
     )
-    typer.echo(f"Created {thread_id}")
+    typer.echo(f"Created {thread_id} as {sender} session {resolved_session}")
     echo_sync(space, f"cas send {thread_id}")
 
 
 @app.command("list")
 def list_threads(
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum threads to show.")] = 20,
+    to_agent: Annotated[str | None, typer.Option("--to-agent", help="Only show threads addressed to one agent.")] = None,
+    to_group: Annotated[str | None, typer.Option("--to-group", help="Only show threads addressed to one group.")] = None,
+    from_agent: Annotated[str | None, typer.Option("--from", help="Only show threads from one agent.")] = None,
     space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
 ) -> None:
     """List recent threads."""
+    if to_agent and to_group:
+        fail("Use at most one of --to-agent or --to-group.")
     space = resolve_space(Path.cwd(), space_option)
-    items = iter_threads(space)[-limit:]
+    items = filter_threads(iter_threads(space), to_agent=to_agent, to_group=to_group, from_agent=from_agent)[-limit:]
     print_threads(items)
 
 
@@ -206,7 +258,7 @@ def inbox(
 
 @app.command()
 def read(
-    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-0001.")],
+    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-20260520T130000Z-a13f9c82.")],
     space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
 ) -> None:
     """Print a full thread."""
@@ -216,7 +268,7 @@ def read(
 
 @app.command()
 def append(
-    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-0001.")],
+    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-20260520T130000Z-a13f9c82.")],
     agent: Annotated[str | None, typer.Option("--agent", help="Appending agent id.")] = None,
     session_id: Annotated[str | None, typer.Option("--session-id", help="Audit session id for this append.")] = None,
     message: Annotated[str | None, typer.Option("--message", help="Markdown message to append.")] = None,
@@ -225,6 +277,7 @@ def append(
 ) -> None:
     """Append a Markdown entry to a thread."""
     space = resolve_space(Path.cwd(), space_option)
+    prepare_write(space)
     resolved_agent = agent or default_agent(required=True)
     resolved_session = append_to_thread(
         space=space,
@@ -239,7 +292,7 @@ def append(
 
 @app.command()
 def comment(
-    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-0001.")],
+    thread_id: Annotated[str, typer.Argument(help="Thread id, e.g. THREAD-20260520T130000Z-a13f9c82.")],
     agent: Annotated[str | None, typer.Option("--agent", help="Appending agent id.")] = None,
     session_id: Annotated[str | None, typer.Option("--session-id", help="Audit session id for this append.")] = None,
     message: Annotated[str | None, typer.Option("--message", help="Markdown message to append.")] = None,
@@ -258,6 +311,92 @@ def sync(
     """Commit and sync the independent CAS space repo."""
     space = resolve_space(Path.cwd(), space_option)
     echo_sync(space, message or "cas sync")
+
+
+@app.command()
+def version() -> None:
+    """Print the CoAgentSpace version."""
+    typer.echo(__version__)
+
+
+@app.command("session")
+def session_command(
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent id. Defaults to local profile.")] = None,
+    session_id: Annotated[str | None, typer.Option("--session-id", help="Explicit session id to resolve.")] = None,
+) -> None:
+    """Print the session id that would be used for an append."""
+    resolved_agent = agent or default_agent(required=True)
+    typer.echo(resolve_session_id(resolved_agent, session_id))
+
+
+@app.command()
+def status(
+    space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
+) -> None:
+    """Show local profile, CAS space, and Git sync state."""
+    space = resolve_space(Path.cwd(), space_option)
+    print_status(space)
+
+
+@app.command()
+def doctor(
+    space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
+) -> None:
+    """Validate the local CoAgentSpace setup."""
+    problems: list[str] = []
+    try:
+        space = resolve_space(Path.cwd(), space_option)
+        typer.echo(f"space: ok {space}")
+    except Exception as exc:
+        typer.echo(f"space: fail {exc}")
+        raise typer.Exit(1) from exc
+
+    profile = load_profile()
+    if profile.default_agent_id:
+        typer.echo(f"profile: ok agent={profile.default_agent_id}")
+    else:
+        problems.append("profile has no default_agent_id")
+
+    for relative in [".coagentspace/config.yaml", ".coagentspace/users.yaml", "threads"]:
+        if (space / relative).exists():
+            typer.echo(f"{relative}: ok")
+        else:
+            problems.append(f"missing {relative}")
+
+    try:
+        load_registry(space)
+        typer.echo("registry: ok")
+    except Exception as exc:
+        problems.append(f"registry parse failed: {exc}")
+
+    invalid = invalid_thread_files(space)
+    if invalid:
+        problems.append("invalid thread files: " + ", ".join(path.name for path in invalid))
+    else:
+        typer.echo("threads: ok")
+
+    typer.echo(f"git_remote: {'ok' if has_remote(space) else 'missing'}")
+    typer.echo(f"git_branch: {current_branch(space) or 'missing'}")
+    typer.echo(f"git_clean: {'ok' if is_worktree_clean(space) else 'dirty'}")
+    if not is_worktree_clean(space):
+        problems.append("CAS git worktree is dirty")
+
+    if problems:
+        for problem in problems:
+            typer.echo(f"problem: {problem}")
+        raise typer.Exit(1)
+    typer.echo("doctor: ok")
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Text to search in thread titles and bodies.")],
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum threads to show.")] = 20,
+    space_option: Annotated[str | None, typer.Option("--space", help="CAS space path.")] = None,
+) -> None:
+    """Search thread titles and bodies."""
+    space = resolve_space(Path.cwd(), space_option)
+    print_threads(search_threads(space, query)[-limit:])
 
 
 @app.command()
