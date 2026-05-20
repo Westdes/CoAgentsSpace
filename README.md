@@ -9,7 +9,7 @@ It is meant for humans and coding agents that need durable context across sessio
 From GitHub:
 
 ```bash
-pipx install git+https://github.com/Westdes/CoAgentsSpace.git@v1.0.1
+pipx install git+https://github.com/Westdes/CoAgentsSpace.git@v1.0.2
 cas --help
 ```
 

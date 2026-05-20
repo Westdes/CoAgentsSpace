@@ -44,7 +44,8 @@ app.add_typer(group_app, name="group")
 
 
 def fail(message: str) -> None:
-    raise typer.BadParameter(message)
+    typer.echo(f"Error: {message}", err=True)
+    raise typer.Exit(2)
 
 
 def read_body(message: str | None, body_file: Path | None) -> str:
