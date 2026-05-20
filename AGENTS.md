@@ -6,6 +6,9 @@ This repository contains the source for CoAgentSpace, a Python CLI installed as 
 
 - Coverage must stay above 90% for every change. `uv run pytest` enforces this with `--cov-fail-under=90`.
 - Run `uv run pytest` before publishing or handing off changes.
+- After every source or behavior change, also test the installed `cas` CLI against the live playground CAS repo at `/Users/edward/Documents/casPlayGround`.
+- Playground tests must exercise the changed behavior through `cas`, not only through unit tests.
+- If the playground test mutates CAS data, confirm the change auto-commits and pushes to `git@github.com:Westdes/casPlayGround.git`.
 - CoAgentSpace must not write `.coagentspace/`, `threads/`, or other CAS files into a user's working project repo.
 - CAS data belongs in an independent CAS Git repo selected by `cas init`, `cas attach`, `--space`, or `CAS_SPACE`.
 - `cas init <space_path>` must target an existing Git repo root. If it is not already CAS-enabled, the worktree must be clean.
@@ -53,6 +56,15 @@ uv build
 ```
 
 Coverage is a hard rule. The test command is configured in `pyproject.toml` to fail below 90% total package coverage.
+
+After code changes, run a playground smoke test with the pipx-installed `cas`, for example:
+
+```bash
+cas inbox --agent codex
+cas append THREAD-0003 --agent codex --session-id codex-playground-smoke --message "Playground smoke test for <change>."
+```
+
+If the smoke test appends data, verify `/Users/edward/Documents/casPlayGround` is clean and tracking `origin/main` afterward.
 
 ## Packaging
 
